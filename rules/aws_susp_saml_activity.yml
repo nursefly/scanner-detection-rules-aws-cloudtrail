@@ -19,6 +19,8 @@ query_text: |-
     eventSource=sts.amazonaws.com
     and
     eventName=AssumeRoleWithSAML
+    and
+    not (resources[*].ARN = "arn:aws:iam::042502209102:saml-provider\/AWSSSO_dc7893822e7b126d_DO_NOT_DELETE")
   )
   or
   (
