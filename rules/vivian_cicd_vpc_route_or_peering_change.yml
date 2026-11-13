@@ -1,0 +1,56 @@
+# schema: https://scanner.dev/schema/scanner-detection-rule.v1.json
+name: Vivian CICD VPC route or peering change
+description: |-
+  ## Goal
+  Detect any change to routing or peering on the CICD account's runner VPC (143646507166). CI jobs there run untrusted
+  pull request code, and the VPC is isolated by having no peering and no route to any other network. It is the
+  account's only VPC, and an SCP limits the account to us-east-1, so the rule matches account-wide.
+
+  ## Strategy
+  Monitor CloudTrail for EC2 calls in the CICD account that change routes, route tables, route propagation, gateway
+  attachments or VPC endpoints, and for VPC peering requests from any account that name CICD as the peer owner.
+  The VPC is managed by OpenTofu in nursefly/vivian-infra (`tofu/cicd/network.tf`), so every legitimate change
+  traces to a merged pull request and an apply by an administrator. Failed calls are kept: an attempt in this
+  account, where CI jobs run untrusted code, is worth review even though nothing changed.
+
+  ## Triage and Response
+  1. If `errorCode` is set, the call failed and nothing changed. Identify the caller from `userIdentity.arn`; if it is
+     a CI job role, treat it as an attempt by pull request code and review that job and its other CloudTrail activity.
+  2. Otherwise, find the merged vivian-infra pull request and the apply that made the change. If both exist, close
+     the alert.
+  3. If not, identify the caller from `userIdentity.arn` and confirm with them.
+  4. If the change is unexplained, revert it, check the CICD VPC's route tables and peering connections for other
+     changes, and review the caller's other CloudTrail activity.
+enabled: true
+severity: Medium
+query_text: |-
+  @scnr.source_type:"aws:cloudtrail"
+  eventSource:"ec2.amazonaws.com"
+  (
+    (
+      recipientAccountId:143646507166
+      (
+        eventName=CreateRoute or eventName=ReplaceRoute or eventName=DeleteRoute
+        or eventName=CreateRouteTable or eventName=DeleteRouteTable
+        or eventName=AssociateRouteTable or eventName=DisassociateRouteTable
+        or eventName=ReplaceRouteTableAssociation
+        or eventName=AttachInternetGateway or eventName=DetachInternetGateway
+        or eventName=AttachVpnGateway or eventName=CreateTransitGatewayVpcAttachment
+        or eventName=EnableVgwRoutePropagation or eventName=DisableVgwRoutePropagation
+        or eventName=CreateVpcEndpoint or eventName=ModifyVpcEndpoint or eventName=DeleteVpcEndpoints
+        or eventName=CreateVpcPeeringConnection or eventName=AcceptVpcPeeringConnection
+        or eventName=DeleteVpcPeeringConnection or eventName=ModifyVpcPeeringConnectionOptions
+      )
+    )
+    or requestParameters.peerOwnerId:143646507166
+  )
+  | groupbycount(recipientAccountId, eventName, errorCode, userIdentity.arn)
+  | where @q.count > 0
+time_range_s: 300
+run_frequency_s: 60
+event_sink_keys:
+- medium_severity_alerts
+tags:
+- techniques.t1599.network_boundary_bridging
+- source.cloudtrail
+- tactics.ta0005.defense_evasion
